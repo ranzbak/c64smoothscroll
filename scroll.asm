@@ -12,19 +12,45 @@ BasicUpstart2(begin)      // <- This creates a basic sys line that can start you
  
 begin:
   jsr $E544 // Clear screen
+  
+  sei // Disable interrupts
+
   lda #23   
   sta $d018 // Text mode to lower
+
+  lda #%01111111 // Switch off interrupts from the CIA-1
+  sta $dc0d
+  and $d011      // Clear most significant bit in VIC raster register
+  sta $d011
+  lda #210       // Set raster line to interrupt on
+  sta $d012
+  lda #<irq      // Set the interrupt vector to point to the service routine
+  sta $0314
+  lda #>irq
+  sta $0315
+  lda #%00000001 // Enable raster interrupt to VIC
+  sta $d01a
   
-  sei
-textrestart:
+  asl $d019  // Ack any previous raster interrupt
+  bit $dc0d  // reading the interrupt control registers 
+  bit $dd0d  // clears them
+
+  cli
+
+  // Set the pointer te the start of the text block
   lda #<text 
   sta TEXTADR
   lda #>text
   sta TEXTADR+1
  
+// Main loop
 loop:  
-  inc $d012 // Inclease the raster line interrupt 
-  bne loop // when 0 trigger, soo durty it hurts
+  jmp loop // Endless loop doing nothing
+
+// Interrupt handler
+irq:
+  lda #7      // Turn screen frame yellow
+  sta $d020
 
 .var DESTSTART=*+1 
   ldx #39 //39
@@ -40,9 +66,9 @@ xpixshiftadd:
 
   cmp XPIXSHIFT 
   sta XPIXSHIFT
-  beq loop
+  beq endirq
 
-  lda SCRLADR,Y
+  lda SCRLADR,Y   // Getting the characters from the string on screen.
   sta TMP1
   lda SCRLADR-1,Y
   pha             // Push acc
@@ -57,25 +83,32 @@ s:
   dex
   bne s
   pla             // pull acc
-getnewchar:
-  //TEXTADR  = *+1
+
+// getnewchar:
   lda (TEXTADR,X) // Load the current character
-  beq textrestart // When 0 end of string is reached.
+  bne overrestart // If it's zero, start over
+  lda #<text  // Reset to the beginning of the text
+  sta TEXTADR
+  lda #>text
+  sta TEXTADR+1
+  jmp endirq 
+overrestart:
 
   iny 
-  bmi *+4
+  bmi nobegin
   ldx #$27
 
 nobegin:  
   inc TEXTADR
-  bne *+4
+  bne textlower
   inc TEXTADR+1
 
+textlower:
   tay  // Transfer A to Y
   bmi dirchange // A < than num
 
   sta SCRLADR,X 
-  bpl loop // Jump to main loop
+  bpl endirq // Jump to main loop
   //---------------------------------------
 dirchange: 
   lda xpixshiftadd
@@ -88,7 +121,13 @@ dirchange:
   iny
   stx SRCSTART
   sty DESTSTART
-  bne loop
+  //bne loop
+endirq:
+  lda #0
+  sta $d020   // Background to black
+  asl $d019   // Acknowledge interrupt 
+  jmp $ea31   // Jump to kernal interrupt routine
+
 //---------------------------------------
 text:    
   .text " This scroller can"
